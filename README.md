@@ -1,10 +1,17 @@
 # openal-soft-orbis
 
-Owns the extracted Orbis port sources. See PORT-PROVENANCE.json for exact origins.
-History was extracted from orbis-launcher with git subtree; the upstream source
-archives and supported profiles remain hash-pinned in lwjgl-orbis.
+OpenAL Soft with an Orbis AudioOut backend, built as the `libopenal` PRX that LWJGL loads at
+run time. See PORT-PROVENANCE.json for exact origins; its `upstream` record is the pinned
+OpenAL Soft release this recipe builds.
 
-Build: `python3 build_openal.py --help`.
-Set `ORBIS_LAUNCHER_ROOT` when the integration checkout is not the default sibling
-`orbis-launcher`. The integration supplies the toolchain, shared PRX recipe and
-output locations; this repository owns the backend and its build adaptations.
+```sh
+python3 build_openal.py --sdk /path/to/ps4-payload-sdk --toolchain /path/to/PS4Toolchain --fetch
+```
+
+Inputs:
+
+- `orbis-runtime-support` as a sibling checkout, or `ORBIS_RUNTIME_SUPPORT`: the shared PRX recipe.
+- An orbis-compat checkout at `$ORBIS_BUILD_ROOT/sources/orbis-compat`.
+
+`ORBIS_BUILD_ROOT` (default `build/`) also holds `downloads/` and the output in `openal/`.
+The launcher sets it to its `graphics-probe/build`. This repository does not depend on LWJGL.

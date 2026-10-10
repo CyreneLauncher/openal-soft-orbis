@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Build OpenAL Soft with an Orbis AudioOut backend as the libopenal PRX LWJGL loads.
 
-The pinned OpenAL Soft source (lwjgl/lwjgl-sources.lock.json) is configured with CMake for the
-Orbis target with every host audio backend off, plus lwjgl/openal/orbis_audioout.cpp registered
+The pinned OpenAL Soft source (PORT-PROVENANCE.json) is configured with CMake for the
+Orbis target with every host audio backend off, plus orbis_audioout.cpp registered
 ahead of the Null backend. It is configured as a shared library so the AL/ALC entry points are
 compiled with export visibility; CMake's own final link is a throwaway, and the module is linked
 from its objects with the shared Orbis PRX recipe (orbis_prx.py).
@@ -15,13 +15,19 @@ import subprocess
 import sys
 from pathlib import Path
 
-INTEGRATION = Path(os.environ.get("ORBIS_LAUNCHER_ROOT", Path(__file__).resolve().parent.parent / "orbis-launcher")).resolve()
-sys.path.insert(0, str(INTEGRATION / "graphics-probe/tools"))
+HERE = Path(__file__).resolve().parent
+# Shared PRX recipe, input stamps and pinned-archive helper (orbis-runtime-support).
+SUPPORT = Path(os.environ.get('ORBIS_RUNTIME_SUPPORT') or HERE.parent / 'orbis-runtime-support').resolve()
+# Downloads, prepared sources (sources/orbis-compat, sources/mesa) and outputs.
+BUILD = Path(os.environ.get('ORBIS_BUILD_ROOT') or HERE / 'build').resolve()
+sys.path.insert(0, str(SUPPORT))
 import build_stamp  # noqa: E402
-import lwjgl_sources  # noqa: E402
 import orbis_prx  # noqa: E402
+import pinned_archive  # noqa: E402
 
-ROOT = orbis_prx.ROOT
+UPSTREAM = json.loads((HERE / 'PORT-PROVENANCE.json').read_text())['upstream']
+# Everything in this repository the build reads: recipe, backend sources and the pin.
+SOURCES = ('.py', '.c', '.cpp', '.h', '.inc', '.json')
 # The ALC 1.0 core LWJGL's ALCCapabilities resolves, plus AL lookup; the full API is exported.
 CORE = ('alcOpenDevice', 'alcCloseDevice', 'alcCreateContext', 'alcMakeContextCurrent',
         'alcProcessContext', 'alcSuspendContext', 'alcDestroyContext', 'alcGetCurrentContext',
@@ -44,20 +50,19 @@ def main():
     parser.add_argument('--sdk', default='/home/wonder/ps4-payload-sdk')
     parser.add_argument('--toolchain', default='/home/wonder/PS4Toolchain')
     parser.add_argument('--paid', default='0x3800000000000011')
-    parser.add_argument('--downloads', default=str(ROOT / 'build/downloads'))
+    parser.add_argument('--downloads', default=str(BUILD / 'downloads'))
     parser.add_argument('--fetch', action='store_true', help='download the pinned archive if missing')
-    parser.add_argument('--output', default=str(ROOT / 'build/openal'))
+    parser.add_argument('--output', default=str(BUILD / 'openal'))
     arguments = parser.parse_args()
     out = Path(arguments.output).resolve()
     out.mkdir(parents=True, exist_ok=True)
     tools = orbis_prx.Toolchain(arguments.sdk, arguments.toolchain)
 
     # The archive is pinned by the lock file, so the stamp covers it through it.
-    compat = ROOT / 'build/sources/orbis-compat'
+    compat = BUILD / 'sources/orbis-compat'
     cmake_version = subprocess.run(['cmake', '--version'], capture_output=True, text=True, check=True).stdout
     stamp = (orbis_prx.stamp_recipe(build_stamp.Stamp(out, 'openal'), tools)
-             .files(Path(__file__), Path(lwjgl_sources.__file__), ROOT / 'lwjgl/lwjgl-sources.lock.json',
-                    ROOT / 'lwjgl/openal', compat / 'src/orbis_thread_atexit.c', compat / 'src/orbis_cxa_guard.c',
+             .files(Path(pinned_archive.__file__), *sorted(p for p in HERE.iterdir() if p.suffix in SOURCES), compat / 'src/orbis_thread_atexit.c', compat / 'src/orbis_cxa_guard.c',
                     compat / 'include')
              .value('cmake', cmake_version)
              .value('arguments', {k: v for k, v in vars(arguments).items() if k not in ('fetch', 'downloads')}))
@@ -66,17 +71,17 @@ def main():
         return
     stamp.invalidate()
 
-    archive = lwjgl_sources.archive('openal-soft', Path(arguments.downloads), arguments.fetch)
-    source = lwjgl_sources.extract(archive, out / 'sources')
+    archive = pinned_archive.archive(UPSTREAM, Path(arguments.downloads), arguments.fetch)
+    source = pinned_archive.extract(archive, out / 'sources')
     backend = source / 'alc/backends'
     for name in ('orbis_audioout.cpp', 'orbis_audioout.h'):
-        shutil.copyfile(ROOT / 'lwjgl/openal' / name, backend / name)
+        shutil.copyfile(HERE / name, backend / name)
     patch(source / 'alc/alc.cpp', '#include "backends/null.h"\n',
           '#include "backends/null.h"\n#ifdef HAVE_ORBIS\n#include "backends/orbis_audioout.h"\n#endif\n')
     patch(source / 'alc/alc.cpp', '    { "null", NullBackendFactory::getFactory },\n',
           '#ifdef HAVE_ORBIS\n    { "orbis", OrbisBackendFactory::getFactory },\n#endif\n'
           '    { "null", NullBackendFactory::getFactory },\n')
-    # ALC_SOFT_system_events (lwjgl/openal/orbis_openal_system_events.c): LWJGL resolves an
+    # ALC_SOFT_system_events (orbis_openal_system_events.c): LWJGL resolves an
     # extension's functions only when the extension string lists it.
     patch(source / 'alc/alc.cpp', '    "ALC_SOFT_loopback_bformat "\n    "ALC_SOFT_reopen_device";\n',
           '    "ALC_SOFT_loopback_bformat "\n    "ALC_SOFT_reopen_device "\n    "ALC_SOFT_system_events";\n')
@@ -93,7 +98,7 @@ def main():
     patch(source / 'common/threads.h', '#elif !defined(_WIN32)\n#include <semaphore.h>\n#endif\n',
           '#elif defined(HAVE_ORBIS)\n#include <pthread.h>\n#elif !defined(_WIN32)\n#include <semaphore.h>\n#endif\n')
     patch(source / 'common/threads.cpp', '#else /* !__APPLE__ */\n',
-          '#elif defined(HAVE_ORBIS)\n\n' + (ROOT / 'lwjgl/openal/orbis_semaphore.inc').read_text()
+          '#elif defined(HAVE_ORBIS)\n\n' + (HERE / 'orbis_semaphore.inc').read_text()
           + '\n#else /* !__APPLE__ */\n')
     # Context teardown must not leave the event thread joinable: an exception out of the
     # wake-up or join would unwind into ~ContextBase and std::terminate the process.
@@ -153,18 +158,18 @@ set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
     if not any(o.name == 'orbis_audioout.cpp.o' for o in objects):
         raise SystemExit('the Orbis AudioOut backend was not compiled')
     # The SDK libc++ calls __cxa_thread_atexit_impl, which its libc lacks; orbis-compat provides it.
-    atexit = tools.compile(ROOT / 'build/sources/orbis-compat/src/orbis_thread_atexit.c',
+    atexit = tools.compile(compat / 'src/orbis_thread_atexit.c',
                            out / 'orbis_thread_atexit.o', '-std=c11', '-O2')
     # libc++abi's static-initialisation guards tell threads apart by getpid() (the SDK maps
     # SYS_gettid to it), so two threads initialising one static abort as "recursive
     # initialization"; orbis-compat's guards replace them.
-    guard = tools.compile(ROOT / 'build/sources/orbis-compat/src/orbis_cxa_guard.c',
+    guard = tools.compile(compat / 'src/orbis_cxa_guard.c',
                           out / 'orbis_cxa_guard.o', '-std=gnu11', '-O2')
     # A defined no-op for the weak thread-local init hook create-fself cannot leave undefined.
-    tls_init = tools.compile(ROOT / 'lwjgl/openal/orbis_openal_tls_init.c', out / 'orbis_openal_tls_init.o',
+    tls_init = tools.compile(HERE / 'orbis_openal_tls_init.c', out / 'orbis_openal_tls_init.o',
                              '-std=c11', '-O2')
     # ALC_SOFT_system_events entry points Minecraft 26.1 calls unconditionally (OpenAL Soft 1.24 has them).
-    events = tools.compile(ROOT / 'lwjgl/openal/orbis_openal_system_events.c', out / 'orbis_openal_system_events.o',
+    events = tools.compile(HERE / 'orbis_openal_system_events.c', out / 'orbis_openal_system_events.o',
                            '-std=c11', '-O2')
     script, runtime = orbis_prx.runtime_objects(tools, out / 'runtime')
     elf = out / 'libopenal.so'
@@ -173,8 +178,8 @@ set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
     audit, _ = orbis_prx.audit(elf, allowed_needed=('libkernel.so', 'libSceAudioOut.so', 'libSceUserService.so'),
                                jni_prefix=None, jni_count=None, require_onload=False, required_c_exports=CORE + ('alcEventIsSupportedSOFT', 'alcEventControlSOFT', 'alcEventCallbackSOFT'))
     audit['prx'] = str(orbis_prx.fself(tools, elf, arguments.paid))
-    summary = {'openal_soft': lwjgl_sources.LOCK['openal-soft']['version'],
-               'source_sha256': lwjgl_sources.LOCK['openal-soft']['sha256'],
+    summary = {'openal_soft': UPSTREAM['version'],
+               'source_sha256': UPSTREAM['sha256'],
                'backend': 'orbis (AudioOut main port, 48 kHz float stereo, 256-frame periods), then null',
                'module': audit}
     (out / 'openal-audit.json').write_text(json.dumps(summary, indent=2) + '\n')
