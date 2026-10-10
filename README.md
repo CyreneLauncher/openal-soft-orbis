@@ -15,3 +15,11 @@ Inputs:
 
 `ORBIS_BUILD_ROOT` (default `build/`) also holds `downloads/` and the output in `openal/`.
 The launcher sets it to its `graphics-probe/build`. This repository does not depend on LWJGL.
+
+## Releases
+
+`.github/workflows/release.yml` builds this port on GitHub-hosted Ubuntu with the SDKs and the
+dependencies pinned in `dependencies.lock.json`, and with `publish` checked releases
+`<tag_prefix>-<commit>` holding the archive `release.json` describes. Cyrene Launcher pins that
+release by SHA-256. The workflow needs a `CYRENE_RELEASES_TOKEN` secret that can read the private
+CyreneLauncher repositories.
